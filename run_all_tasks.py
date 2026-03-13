@@ -140,39 +140,41 @@ class DeepFundingPipeline:
             return originality_df
         elif level == 3:
             df = pd.read_csv(self.config['task3_input'])
-            df = df.rename(columns={'dependency': 'parent'})
+            # Keep 'dependency' column name for Task 3 (don't rename to 'parent')
             def normalize_url(url):
                 if not url.startswith('http'):
                     return f'https://github.com/{url}'
                 return url
             df['repo'] = df['repo'].apply(normalize_url)
-            df['parent'] = df['parent'].apply(normalize_url)
+            df['dependency'] = df['dependency'].apply(normalize_url)
             self.logger.info(f'Loaded {len(df)} pairs')
             return df
         else:
             raise ValueError(f'Invalid level: {level}')
     
-    def _process_parent_group(self, group):
-        parent_name = group['parent'].iloc[0] if len(group) > 0 else 'unknown'
+    def _process_parent_group(self, group, level=None):
+        # For Task 3, use 'dependency' column; for Tasks 1 & 2, use 'parent'
+        parent_col = 'dependency' if level == 3 else 'parent'
+        parent_name = group[parent_col].iloc[0] if len(group) > 0 else 'unknown'
         n_repos = len(group)
         try:
             self.logger.info(f'Processing: {parent_name} ({n_repos} repos)')
             if n_repos == 0:
-                return pd.DataFrame(columns=['repo', 'parent', 'weight'])
+                return pd.DataFrame(columns=['repo', parent_col, 'weight'])
             if n_repos == 1:
-                return pd.DataFrame({'repo': group['repo'].values, 'parent': group['parent'].values, 'weight': [1.0]})
+                return pd.DataFrame({'repo': group['repo'].values, parent_col: group[parent_col].values, 'weight': [1.0]})
             r_ij = self.predictor.predict(group)
             weights = self.optimizer.fit_transform(r_ij)
             weights_sum = np.sum(weights)
             if abs(weights_sum - 1.0) >= 1e-6:
                 self.logger.warning(f'Re-normalizing: sum={weights_sum:.10f}')
                 weights = weights / weights_sum
-            result_df = pd.DataFrame({'repo': group['repo'].values, 'parent': group['parent'].values, 'weight': weights})
+            result_df = pd.DataFrame({'repo': group['repo'].values, parent_col: group[parent_col].values, 'weight': weights})
             self.logger.info(f'✓ {parent_name}: sum={np.sum(weights):.10f}')
             return result_df
         except Exception as e:
             self.logger.error(f'✗ Failed {parent_name}: {e}')
-            return pd.DataFrame(columns=['repo', 'parent', 'weight'])
+            return pd.DataFrame(columns=['repo', parent_col, 'weight'])
     
     def _export_csv(self, df, filename, level=None):
         self.logger.info(f'Exporting to {filename}')
@@ -185,8 +187,13 @@ class DeepFundingPipeline:
                 df_export['originality'] = df_export['originality'].apply(lambda x: f'{x:.2f}')
                 output_path = Path(self.config['output_dir']) / filename
                 df_export.to_csv(output_path, index=False, columns=['repo', 'originality'])
+        elif level == 3:
+            # Task 3: dependency,repo,weight format
+            df_export['weight'] = df_export['weight'].apply(lambda x: f'{x:.6f}')
+            output_path = Path(self.config['output_dir']) / filename
+            df_export.to_csv(output_path, index=False, columns=['dependency', 'repo', 'weight'])
         else:
-            # Tasks 1 and 3: repo,parent,weight format
+            # Task 1: repo,parent,weight format
             df_export['weight'] = df_export['weight'].apply(lambda x: f'{x:.6f}')
             output_path = Path(self.config['output_dir']) / filename
             df_export.to_csv(output_path, index=False, columns=['repo', 'parent', 'weight'])
@@ -227,10 +234,12 @@ class DeepFundingPipeline:
             
             return validation_passed
         
-        # Tasks 1 and 3: Standard validation (repo,parent,weight format)
-        # Check 2: Required columns present (Req 11.1)
-        if not all(col in df.columns for col in ['repo', 'parent', 'weight']):
-            self.logger.error('Validation failed: Missing required columns (repo, parent, weight)')
+        # Tasks 1 and 3: Standard validation (with different parent column names)
+        parent_col = 'dependency' if level == 3 else 'parent'
+        
+        # Check 2: Required columns present
+        if not all(col in df.columns for col in ['repo', parent_col, 'weight']):
+            self.logger.error(f'Validation failed: Missing required columns (repo, {parent_col}, weight)')
             return False
         
         # Check 3: Weight column is numeric
@@ -238,30 +247,30 @@ class DeepFundingPipeline:
             self.logger.error('Validation failed: Weight column is not numeric')
             return False
         
-        # Check 4: Weight range validation (Req 11.4, 20.2)
+        # Check 4: Weight range validation
         invalid_weights = df[(df['weight'] <= 0.0) | (df['weight'] > 1.0)]
         if len(invalid_weights) > 0:
             self.logger.error(f'Validation failed: {len(invalid_weights)} weights outside valid range (0.0 < weight <= 1.0)')
-            self.logger.error(f'Invalid weights: {invalid_weights[["repo", "parent", "weight"]].head()}')
+            self.logger.error(f'Invalid weights: {invalid_weights[["repo", parent_col, "weight"]].head()}')
             validation_passed = False
         
-        # Check 5: Normalization constraint per parent group (Req 11.8, 20.1)
-        grouped = df.groupby('parent')
+        # Check 5: Normalization constraint per parent group
+        grouped = df.groupby(parent_col)
         tolerance = self.config.get('normalization_tolerance', 1e-6)
         for parent, group in grouped:
             weight_sum = group['weight'].sum()
             if abs(weight_sum - 1.0) >= tolerance:
-                self.logger.error(f'Validation failed: Parent "{parent}" weight sum = {weight_sum:.10f} (expected 1.0 ± {tolerance})')
+                self.logger.error(f'Validation failed: {parent_col} "{parent}" weight sum = {weight_sum:.10f} (expected 1.0 ± {tolerance})')
                 validation_passed = False
         
-        # Check 6: No duplicate (repo, parent) pairs (Req 11.6)
-        duplicates = df.duplicated(subset=['repo', 'parent'], keep=False)
+        # Check 6: No duplicate (repo, parent) pairs
+        duplicates = df.duplicated(subset=['repo', parent_col], keep=False)
         if duplicates.any():
             n_duplicates = duplicates.sum()
-            self.logger.error(f'Validation failed: {n_duplicates} duplicate (repo, parent) pairs found')
+            self.logger.error(f'Validation failed: {n_duplicates} duplicate (repo, {parent_col}) pairs found')
             validation_passed = False
         
-        # Check 7: All input repos present in output (Req 11.7, 20.3)
+        # Check 7: All input repos present in output
         if input_df is not None:
             input_repos = set(input_df['repo'].unique())
             output_repos = set(df['repo'].unique())
@@ -286,13 +295,15 @@ class DeepFundingPipeline:
             self.logger.info(f'Task {level} complete: {len(df)} rows (originality scores)')
             return df
         
-        grouped = df.groupby('parent')
+        # For Task 3, group by 'dependency'; for Task 1, group by 'parent'
+        parent_col = 'dependency' if level == 3 else 'parent'
+        grouped = df.groupby(parent_col)
         n_parent_groups = len(grouped)
-        self.logger.info(f'Found {n_parent_groups} parent groups')
+        self.logger.info(f'Found {n_parent_groups} {parent_col} groups')
         results = []
         failed_parents = []
         for parent, group in grouped:
-            result_df = self._process_parent_group(group)
+            result_df = self._process_parent_group(group, level=level)
             if len(result_df) > 0:
                 results.append(result_df)
             else:
@@ -301,12 +312,12 @@ class DeepFundingPipeline:
             gc.collect()
         if len(failed_parents) > 0:
             failure_rate = len(failed_parents) / n_parent_groups
-            self.logger.warning(f'Failed parent groups: {len(failed_parents)}/{n_parent_groups} ({failure_rate*100:.1f}%)')
+            self.logger.warning(f'Failed {parent_col} groups: {len(failed_parents)}/{n_parent_groups} ({failure_rate*100:.1f}%)')
             if failure_rate > 0.5:
-                self.logger.critical(f'CRITICAL: More than 50% of parent groups failed!')
+                self.logger.critical(f'CRITICAL: More than 50% of {parent_col} groups failed!')
         if len(results) == 0:
             self.logger.error('No results generated')
-            return pd.DataFrame(columns=['repo', 'parent', 'weight'])
+            return pd.DataFrame(columns=['repo', parent_col, 'weight'])
         output_df = pd.concat(results, ignore_index=True)
         self.logger.info(f'Task {level} complete: {len(output_df)} rows generated')
         return output_df
@@ -344,6 +355,8 @@ def main():
             logger.info(f'Repositories processed: {len(output_df)}')
             if task_level == 2:
                 logger.info(f'Originality scores: {len(output_df)} repos')
+            elif task_level == 3:
+                logger.info(f'Dependency groups: {len(output_df.groupby("dependency"))}')
             else:
                 logger.info(f'Parent groups: {len(output_df.groupby("parent"))}')
             logger.info(f'Execution time: {time.time() - start_time:.2f} seconds')
