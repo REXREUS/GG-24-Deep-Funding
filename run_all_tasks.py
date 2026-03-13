@@ -134,13 +134,10 @@ class DeepFundingPipeline:
             self.logger.info(f'Loaded {len(df)} rows')
             return df
         elif level == 2:
-            repos_df = pd.read_csv(self.config['task2_repos'])
-            def extract_org(url):
-                match = re.search(r'github\.com/([^/]+)/', url)
-                return match.group(1) if match else 'unknown'
-            repos_df['parent'] = repos_df['repo'].apply(extract_org)
-            self.logger.info(f'Loaded {len(repos_df)} repos')
-            return repos_df
+            # Task 2: Simply use originality scores (no optimization needed)
+            originality_df = pd.read_csv(self.config['task2_originality'])
+            self.logger.info(f'Loaded {len(originality_df)} repos with originality scores')
+            return originality_df
         elif level == 3:
             df = pd.read_csv(self.config['task3_input'])
             df = df.rename(columns={'dependency': 'parent'})
@@ -177,37 +174,78 @@ class DeepFundingPipeline:
             self.logger.error(f'✗ Failed {parent_name}: {e}')
             return pd.DataFrame(columns=['repo', 'parent', 'weight'])
     
-    def _export_csv(self, df, filename):
+    def _export_csv(self, df, filename, level=None):
         self.logger.info(f'Exporting to {filename}')
         df_export = df.copy()
-        df_export['weight'] = df_export['weight'].apply(lambda x: f'{x:.6f}')
-        output_path = Path(self.config['output_dir']) / filename
-        df_export.to_csv(output_path, index=False, columns=['repo', 'parent', 'weight'])
+        
+        # Task 2 has different format: repo,originality (no weight formatting needed)
+        if level == 2:
+            # Ensure originality has proper precision
+            if 'originality' in df_export.columns:
+                df_export['originality'] = df_export['originality'].apply(lambda x: f'{x:.2f}')
+                output_path = Path(self.config['output_dir']) / filename
+                df_export.to_csv(output_path, index=False, columns=['repo', 'originality'])
+        else:
+            # Tasks 1 and 3: repo,parent,weight format
+            df_export['weight'] = df_export['weight'].apply(lambda x: f'{x:.6f}')
+            output_path = Path(self.config['output_dir']) / filename
+            df_export.to_csv(output_path, index=False, columns=['repo', 'parent', 'weight'])
+        
         self.logger.info(f'✓ Exported {len(df_export)} rows to {filename}')
     
-    def validate_output(self, df, input_df=None):
+    def validate_output(self, df, input_df=None, level=None):
         self.logger.info('Starting output validation')
         validation_passed = True
         
+        # Check 1: DataFrame not empty
         if df is None or len(df) == 0:
             self.logger.error('Validation failed: Empty DataFrame')
             return False
         
+        # Task 2 has different validation (repo,originality format)
+        if level == 2:
+            # Check required columns for Task 2
+            if not all(col in df.columns for col in ['repo', 'originality']):
+                self.logger.error('Validation failed: Missing required columns (repo, originality)')
+                return False
+            
+            # Check originality is numeric
+            if not pd.api.types.is_numeric_dtype(df['originality']):
+                self.logger.error('Validation failed: Originality column is not numeric')
+                return False
+            
+            # Check originality range (0.0, 1.0]
+            invalid_originality = df[(df['originality'] <= 0.0) | (df['originality'] > 1.0)]
+            if len(invalid_originality) > 0:
+                self.logger.error(f'Validation failed: {len(invalid_originality)} originality values outside range (0.0, 1.0]')
+                validation_passed = False
+            
+            if validation_passed:
+                self.logger.info('✓ All validations passed')
+            else:
+                self.logger.error('✗ Validation failed')
+            
+            return validation_passed
+        
+        # Tasks 1 and 3: Standard validation (repo,parent,weight format)
+        # Check 2: Required columns present (Req 11.1)
         if not all(col in df.columns for col in ['repo', 'parent', 'weight']):
             self.logger.error('Validation failed: Missing required columns (repo, parent, weight)')
             return False
         
+        # Check 3: Weight column is numeric
         if not pd.api.types.is_numeric_dtype(df['weight']):
             self.logger.error('Validation failed: Weight column is not numeric')
             return False
         
-        # Fixed validation: allow weight = 1.0 for single-repo parent groups
+        # Check 4: Weight range validation (Req 11.4, 20.2)
         invalid_weights = df[(df['weight'] <= 0.0) | (df['weight'] > 1.0)]
         if len(invalid_weights) > 0:
             self.logger.error(f'Validation failed: {len(invalid_weights)} weights outside valid range (0.0 < weight <= 1.0)')
             self.logger.error(f'Invalid weights: {invalid_weights[["repo", "parent", "weight"]].head()}')
             validation_passed = False
         
+        # Check 5: Normalization constraint per parent group (Req 11.8, 20.1)
         grouped = df.groupby('parent')
         tolerance = self.config.get('normalization_tolerance', 1e-6)
         for parent, group in grouped:
@@ -216,12 +254,14 @@ class DeepFundingPipeline:
                 self.logger.error(f'Validation failed: Parent "{parent}" weight sum = {weight_sum:.10f} (expected 1.0 ± {tolerance})')
                 validation_passed = False
         
+        # Check 6: No duplicate (repo, parent) pairs (Req 11.6)
         duplicates = df.duplicated(subset=['repo', 'parent'], keep=False)
         if duplicates.any():
             n_duplicates = duplicates.sum()
             self.logger.error(f'Validation failed: {n_duplicates} duplicate (repo, parent) pairs found')
             validation_passed = False
         
+        # Check 7: All input repos present in output (Req 11.7, 20.3)
         if input_df is not None:
             input_repos = set(input_df['repo'].unique())
             output_repos = set(df['repo'].unique())
@@ -240,6 +280,12 @@ class DeepFundingPipeline:
     def run_task(self, level):
         self.logger.info(f'Starting Task {level} execution')
         df = self._load_input(level)
+        
+        # Task 2 is special - no optimization needed, just return originality scores
+        if level == 2:
+            self.logger.info(f'Task {level} complete: {len(df)} rows (originality scores)')
+            return df
+        
         grouped = df.groupby('parent')
         n_parent_groups = len(grouped)
         self.logger.info(f'Found {n_parent_groups} parent groups')
@@ -287,16 +333,19 @@ def main():
         
         logger.info('')
         logger.info(f'Validating Task {task_level} output...')
-        validation_passed = pipeline.validate_output(output_df)
+        validation_passed = pipeline.validate_output(output_df, level=task_level)
         
         if validation_passed:
-            pipeline._export_csv(output_df, f'submission_task{task_level}.csv')
+            pipeline._export_csv(output_df, f'submission_task{task_level}.csv', level=task_level)
             logger.info('')
             logger.info('='*80)
             logger.info(f'TASK {task_level} SUMMARY')
             logger.info('='*80)
             logger.info(f'Repositories processed: {len(output_df)}')
-            logger.info(f'Parent groups: {len(output_df.groupby("parent"))}')
+            if task_level == 2:
+                logger.info(f'Originality scores: {len(output_df)} repos')
+            else:
+                logger.info(f'Parent groups: {len(output_df.groupby("parent"))}')
             logger.info(f'Execution time: {time.time() - start_time:.2f} seconds')
             logger.info(f'Output file: submission_task{task_level}.csv')
             logger.info('Status: ✓ SUCCESS')

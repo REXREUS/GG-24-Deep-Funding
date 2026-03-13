@@ -192,10 +192,12 @@ python -m notebook gitcoin_deep_funding_optimizer.ipynb
 For detailed information, refer to:
 - **Quick reference**: [README.md](README.md)
 - **Technical details**: [USAGE_GUIDE.md](USAGE_GUIDE.md)
-- **Quick start**: [QUICKSTART.md](QUICKSTART.md)
-- **Version history**: [CHANGELOG.md](CHANGELOG.md)
+
 
 ## License
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 This project is part of the Gitcoin GG-24 Deep Funding competition.
 
