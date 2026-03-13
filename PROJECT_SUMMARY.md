@@ -9,9 +9,9 @@ A production-ready mathematical optimization system for allocating $350,000 to E
 ### Core Files
 - ✅ `gitcoin_deep_funding_optimizer.ipynb` - Main Jupyter notebook (5 cells)
 - ✅ `run_all_tasks.py` - Standalone Python execution script
-- ✅ `result/submission_task1.csv` - Task 1 output (98 rows)
-- ✅ `result/submission_task2.csv` - Task 2 output (98 rows)
-- ✅ `result/submission_task3.csv` - Task 3 output (3,677 rows)
+- ✅ `result/submission_task1.csv` - Task 1 output (98 rows, format: `repo,parent,weight`)
+- ✅ `result/submission_task2.csv` - Task 2 output (98 rows, format: `repo,originality`)
+- ✅ `result/submission_task3.csv` - Task 3 output (3,677 rows, format: `repo,parent,weight`)
 
 ### Documentation
 - ✅ `README.md` - Professional project documentation
@@ -23,13 +23,14 @@ A production-ready mathematical optimization system for allocating $350,000 to E
 ## Key Features
 
 ### Mathematical Rigor
-- Bradley-Terry model in log-space
+- Bradley-Terry model in log-space (Tasks 1 & 3)
 - Huber loss optimization (robust to outliers)
 - Log-sum-exp normalization (numerically stable)
 - IRLS via scipy.optimize.least_squares
+- Direct originality score assignment (Task 2)
 
 ### Production Quality
-- Comprehensive validation (8 checks)
+- Task-specific validation (different rules per task)
 - Memory-efficient processing (parent group isolation)
 - Error handling and logging
 - Reproducible results (seed=42)
@@ -38,6 +39,14 @@ A production-ready mathematical optimization system for allocating $350,000 to E
 1. **Python Script**: `python run_all_tasks.py` (recommended)
 2. **Jupyter Notebook**: Interactive cell-by-cell execution
 3. **Programmatic**: Import and use as library
+
+## Task Descriptions
+
+| Task | Method | Input | Output Format | Rows |
+|------|--------|-------|---------------|------|
+| Task 1 | Bradley-Terry optimization | repos_to_predict.csv | `repo,parent,weight` | 98 |
+| Task 2 | Direct originality assignment | originality-predictions.csv | `repo,originality` | 98 |
+| Task 3 | Bradley-Terry optimization | pairs_to_predict.csv | `repo,parent,weight` | 3,677 |
 
 ## Recent Fixes (v1.1.0)
 
@@ -58,11 +67,11 @@ A production-ready mathematical optimization system for allocating $350,000 to E
 
 ## Performance Metrics
 
-| Task | Repos | Parent Groups | Execution Time | Status |
-|------|-------|---------------|----------------|--------|
-| Task 1 | 98 | 1 | ~5 seconds | ✅ Pass |
-| Task 2 | 98 | 74 | ~5 seconds | ✅ Pass |
-| Task 3 | 3,677 | 1,953 | ~3-5 minutes | ✅ Pass |
+| Task | Repos | Method | Execution Time | Status |
+|------|-------|--------|----------------|--------|
+| Task 1 | 98 | Bradley-Terry optimization | ~5 seconds | ✅ Pass |
+| Task 2 | 98 | Direct originality assignment | <1 second | ✅ Pass |
+| Task 3 | 3,677 | Bradley-Terry optimization | ~3-5 minutes | ✅ Pass |
 
 ## Architecture
 
@@ -80,8 +89,9 @@ DeepFundingPipeline (Orchestration)
 
 ## Validation Framework
 
-All outputs pass 8 comprehensive validation checks:
+Task-specific validation rules:
 
+**Tasks 1 & 3** (repo,parent,weight format):
 1. ✅ Non-empty DataFrame
 2. ✅ Required columns present (repo, parent, weight)
 3. ✅ Numeric weight column
@@ -89,6 +99,12 @@ All outputs pass 8 comprehensive validation checks:
 5. ✅ Normalization: `sum(weights) = 1.0` per parent (±1e-6)
 6. ✅ No duplicate (repo, parent) pairs
 7. ✅ All input repos present in output
+
+**Task 2** (repo,originality format):
+1. ✅ Non-empty DataFrame
+2. ✅ Required columns present (repo, originality)
+3. ✅ Numeric originality column
+4. ✅ Originality range: `(0.0, 1.0]`
 8. ✅ Weight precision ≥6 decimal places
 
 ## Configuration

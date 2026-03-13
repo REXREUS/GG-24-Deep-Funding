@@ -1,19 +1,6 @@
 # Quick Start Guide
 
-Get the Gitcoin Deep Funding Optimizer running in 3 simple steps.
-
-## Prerequisites
-
-- Python 3.8 or higher
-- 8GB RAM minimum
-
-## Installation
-
-```bash
-pip install numpy pandas scipy jupyter
-```
-
-## Execution
+## Running the Optimizer
 
 ### Option 1: Python Script (Fastest)
 
@@ -21,45 +8,82 @@ pip install numpy pandas scipy jupyter
 python run_all_tasks.py
 ```
 
-### Option 2: Jupyter Notebook (Interactive)
+This will execute all three tasks and generate CSV files in the `result/` directory.
+
+### Option 2: Jupyter Notebook
 
 ```bash
+# Start Jupyter
 python -m notebook gitcoin_deep_funding_optimizer.ipynb
+
+# In the notebook:
+# - Click "Kernel" → "Restart & Run All"
+# - Wait for completion
 ```
 
-Then in the browser: **Kernel → Restart & Run All**
+## Expected Output
 
-## Output
+After execution, you'll find three files in `result/`:
 
-Check the `result/` directory for three CSV files:
-- `submission_task1.csv` (98 rows)
-- `submission_task2.csv` (98 rows)  
-- `submission_task3.csv` (3,677 rows)
+1. **submission_task1.csv** (98 rows)
+   - Format: `repo,parent,weight`
+   - Method: Bradley-Terry optimization
+   - Time: ~5 seconds
 
-## Execution Time
+2. **submission_task2.csv** (98 rows)
+   - Format: `repo,originality`
+   - Method: Direct originality score assignment
+   - Time: <1 second
 
-- Task 1: ~5 seconds
-- Task 2: ~5 seconds
-- Task 3: ~3-5 minutes
+3. **submission_task3.csv** (3,677 rows)
+   - Format: `repo,parent,weight`
+   - Method: Bradley-Terry optimization
+   - Time: ~3-5 minutes
 
-## Need Help?
+## Task 2 Implementation Note
 
-- **Quick reference**: See [README.md](README.md)
-- **Technical details**: See [USAGE_GUIDE.md](USAGE_GUIDE.md)
-- **Version history**: See [CHANGELOG.md](CHANGELOG.md)
+Task 2 uses a different methodology than Tasks 1 and 3:
+
+- **Tasks 1 & 3**: Use Bradley-Terry model optimization to compute relative weights
+- **Task 2**: Directly assigns pre-computed originality scores (no optimization)
+
+This is why Task 2 has a different output format (`repo,originality` instead of `repo,parent,weight`).
+
+## Validation
+
+All outputs are automatically validated:
+
+- ✓ Column format correctness
+- ✓ Value range validation
+- ✓ Normalization constraints (Tasks 1 & 3)
+- ✓ Completeness checks
 
 ## Troubleshooting
 
-**Jupyter not found?**
+### Jupyter not found
 ```bash
-python -m notebook gitcoin_deep_funding_optimizer.ipynb
+pip install jupyter notebook
 ```
 
-**Import errors?**
+### Import errors
 ```bash
-pip install --upgrade numpy pandas scipy jupyter
+pip install numpy pandas scipy
 ```
 
-**Memory issues?**
+### Memory issues (Task 3)
+- Ensure at least 8GB RAM available
 - Close other applications
-- Ensure 8GB+ RAM available
+
+## Next Steps
+
+After successful execution:
+
+1. Verify output files in `result/` directory
+2. Check file formats match expected structure
+3. Review validation logs for any warnings
+4. Proceed with submission
+
+For detailed documentation, see:
+- `README.md` - Project overview and mathematical framework
+- `USAGE_GUIDE.md` - Technical details and architecture
+- `PROJECT_SUMMARY.md` - High-level project summary

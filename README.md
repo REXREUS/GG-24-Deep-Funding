@@ -4,11 +4,11 @@ A mathematical optimization system for allocating $350,000 to Ethereum open sour
 
 ## Overview
 
-This system computes relative weights for repositories based on pairwise comparisons, processing three allocation tasks with increasing complexity:
+This system processes three allocation tasks with different methodologies:
 
-- **Task 1**: Single-parent allocation (98 repos, parent: 'ethereum')
-- **Task 2**: Multi-parent allocation (98 repos, 74 parent groups)
-- **Task 3**: Dependency graph allocation (3,677 pairs, 1,953 parent groups)
+- **Task 1**: Single-parent allocation using Bradley-Terry optimization (98 repos, parent: 'ethereum')
+- **Task 2**: Originality score assignment (98 repos with pre-computed originality values)
+- **Task 3**: Dependency graph allocation using Bradley-Terry optimization (3,677 pairs, 1,953 parent groups)
 
 ## Key Features
 
@@ -57,11 +57,11 @@ python -m notebook gitcoin_deep_funding_optimizer.ipynb
 
 After execution, three CSV files will be generated in the `result/` directory:
 
-- `submission_task1.csv` - Task 1 results (98 rows)
-- `submission_task2.csv` - Task 2 results (98 rows)
-- `submission_task3.csv` - Task 3 results (3,677 rows)
+- `submission_task1.csv` - Task 1 results (98 rows, format: `repo,parent,weight`)
+- `submission_task2.csv` - Task 2 results (98 rows, format: `repo,originality`)
+- `submission_task3.csv` - Task 3 results (3,677 rows, format: `repo,parent,weight`)
 
-Each CSV file contains three columns: `repo`, `parent`, `weight`
+**Note**: Task 2 has a different output format (`repo,originality`) as it uses pre-computed originality scores rather than optimization.
 
 ## Project Structure
 
@@ -161,9 +161,9 @@ Key hyperparameters in `CONFIG` dictionary:
 
 Typical execution times on modern hardware:
 
-- **Task 1**: ~5 seconds (98 repos, 1 parent group)
-- **Task 2**: ~5 seconds (98 repos, 74 parent groups)
-- **Task 3**: ~3-5 minutes (3,677 pairs, 1,953 parent groups)
+- **Task 1**: ~5 seconds (98 repos, 1 parent group, Bradley-Terry optimization)
+- **Task 2**: <1 second (98 repos, direct originality score assignment)
+- **Task 3**: ~3-5 minutes (3,677 pairs, 1,953 parent groups, Bradley-Terry optimization)
 
 ## Validation
 
