@@ -51,5 +51,19 @@ desktop.ini
 result/*.csv
 !result/.gitkeep
 
+# Analysis scripts (keep only run_all_tasks.py)
+estimate_scores.py
+deep_analysis.py
+deep_analysis2.py
+analyze_task3_format.py
+analyze_task3_weights.py
+analyze_inverse_indegree.py
+analyze_dep_scores.py
+analyze_task1_deeper.py
+analyze_ground_truth.py
+analyze_outputs.py
+check_quality.py
+verify_outputs.py
+
 # Logs
 *.log
