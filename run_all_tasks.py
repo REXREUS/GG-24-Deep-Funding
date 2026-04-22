@@ -31,12 +31,16 @@ CONFIG = {
     'normalization_tolerance': 1e-6,
     'epsilon': 1e-10,
     'random_seed': RANDOM_SEED,
+    
     'task1_input': 'data/level 1/repos_to_predict.csv',
-    'task1_predictions': 'data/level 1/l1-predictions.csv',
+    'task1_current': 'current-prediction/l1-weights.csv',
+
     'task2_repos': 'data/level 2/repos_to_predict.csv',
-    'task2_originality': 'data/level 2/originality-predictions.csv',
+    'task2_current': 'data/level 2/originality-predictions.csv',
+
     'task3_input': 'data/level 3/pairs_to_predict.csv',
-    'task3_predictions': 'data/level 3/l2-predictions-example.csv',
+    'task3_current': 'data/level 3/l2-predictions-example.csv',
+
     'output_dir': 'result'
 }
 
@@ -127,6 +131,85 @@ class PairwisePredictor:
         return r_ij
 
 
+class OriginalityPredictor:
+    """
+    Predicts originality score (0-1) for each repo.
+    Score = how much of the repo's value is its own work vs its dependencies.
+    0.2 = mostly fork/wrapper, 0.5 = balanced, 0.8 = mostly original work.
+    """
+    # Orgs known for highly original core infrastructure
+    HIGH_ORIGINALITY_ORGS = {
+        'ethereum', 'ethers-io', 'foundry-rs', 'paradigmxyz', 'sigp',
+        'nomicfoundation', 'vyperlang', 'erigontech', 'alloy-rs', 'bluealloy',
+        'argotorg', 'ipsilon', 'supranational', 'herumi', 'arkworks-rs',
+        'espressosystems', 'plonky3', 'powdr-labs', 'lambdaclass',
+    }
+    # Orgs that build on top of others (middleware, tooling, wrappers)
+    MID_ORIGINALITY_ORGS = {
+        'openzeppelin', 'consensys', 'hyperledger', 'safe-global', 'wevm',
+        'chainsafe', 'nethermindeth', 'flashbots', 'offchainlabs', 'status-im',
+        'libp2p', 'scaffold-eth', 'eth-infinitism', 'protofire', 'blockscout',
+        'defillama', 'l2beat', 'taikoxyz', 'risc0', 'succinctlabs',
+    }
+
+    def predict_originality(self, repos_df: pd.DataFrame, pairs_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Compute originality score for each repo using:
+        1. Org reputation tier (core infra = more original)
+        2. Dependency count (more deps = less original)
+        3. Whether repo is depended upon by others (being a dependency = more original)
+        """
+        results = []
+
+        # Build dependency graph stats from pairs_to_predict
+        dep_count = pairs_df.groupby('repo').size().to_dict()
+        depended_on = pairs_df.groupby('dependency').size().to_dict()
+        max_deps = max(dep_count.values()) if dep_count else 1
+        max_dependents = max(depended_on.values()) if depended_on else 1
+
+        for _, row in repos_df.iterrows():
+            url = row['repo']
+            url_lower = url.lower()
+
+            # Feature 1: org tier base score (continuous)
+            org = self._get_org(url_lower)
+            if org in self.HIGH_ORIGINALITY_ORGS:
+                tier_score = 0.72
+            elif org in self.MID_ORIGINALITY_ORGS:
+                tier_score = 0.52
+            else:
+                tier_score = 0.44
+
+            # Feature 2: dependency count penalty (continuous, normalized)
+            repo_short = self._to_short(url_lower)
+            n_deps = dep_count.get(repo_short, dep_count.get(url_lower, 0))
+            # Penalty scales from 0 to 0.25 based on normalized dep count
+            dep_penalty = 0.25 * (n_deps / max_deps)
+
+            # Feature 3: being depended upon bonus (continuous, normalized)
+            n_dependents = depended_on.get(repo_short, depended_on.get(url_lower, 0))
+            # Bonus scales from 0 to 0.15 based on normalized dependent count
+            dep_bonus = 0.15 * (n_dependents / max_dependents)
+
+            score = tier_score - dep_penalty + dep_bonus
+            score = max(0.10, min(0.95, score))
+
+            results.append({'repo': url, 'originality': round(score, 6)})
+
+        return pd.DataFrame(results)
+
+    def _get_org(self, url: str) -> str:
+        match = re.search(r'github\.com/([^/]+)/', url)
+        if match:
+            return match.group(1).lower()
+        parts = url.split('/')
+        return parts[0].lower() if parts else 'unknown'
+
+    def _to_short(self, url: str) -> str:
+        match = re.search(r'github\.com/(.+)', url)
+        return match.group(1).rstrip('/') if match else url
+
+
 class DeepFundingPipeline:
     def __init__(self, predictor, optimizer, config):
         self.predictor = predictor
@@ -145,16 +228,10 @@ class DeepFundingPipeline:
             self.logger.info(f'Loaded {len(df)} rows')
             return df
         elif level == 2:
-            # Load repos_to_predict and merge with originality scores
+            # Task 2: just load the list of repos to predict originality for
             repos_df = pd.read_csv(self.config['task2_repos'])
-            repos_df['repo'] = repos_df['repo'].str.lower()
-            originality_df = pd.read_csv(self.config['task2_originality'])
-            originality_df['repo'] = originality_df['repo'].str.lower()
-            df = repos_df.merge(originality_df, on='repo', how='left')
-            df['parent'] = 'ethereum'
-            df['originality'] = df['originality'].fillna(0.5)
-            self.logger.info(f'Loaded {len(df)} repos with originality scores')
-            return df
+            self.logger.info(f'Loaded {len(repos_df)} repos for originality prediction')
+            return repos_df
         elif level == 3:
             df = pd.read_csv(self.config['task3_input'])
             # Keep original short URL format (org/repo) — do NOT normalize to full URLs
@@ -219,16 +296,19 @@ class DeepFundingPipeline:
     def _export_csv(self, df, filename, level=None):
         self.logger.info(f'Exporting to {filename}')
         df_export = df.copy()
+        output_path = Path(self.config['output_dir']) / filename
 
-        if level == 3:
+        if level == 2:
+            # Task 2: repo,originality format
+            df_export['originality'] = df_export['originality'].apply(lambda x: f'{float(x):.6f}')
+            df_export.to_csv(output_path, index=False, columns=['repo', 'originality'])
+        elif level == 3:
             # Task 3: dependency,repo,weight format
             df_export['weight'] = df_export['weight'].apply(lambda x: f'{x:.10f}')
-            output_path = Path(self.config['output_dir']) / filename
             df_export.to_csv(output_path, index=False, columns=['dependency', 'repo', 'weight'])
         else:
-            # Task 1 & 2: repo,parent,weight format
+            # Task 1: repo,parent,weight format
             df_export['weight'] = df_export['weight'].apply(lambda x: f'{x:.10f}')
-            output_path = Path(self.config['output_dir']) / filename
             df_export.to_csv(output_path, index=False, columns=['repo', 'parent', 'weight'])
 
         self.logger.info(f'✓ Exported {len(df_export)} rows to {filename}')
@@ -241,7 +321,21 @@ class DeepFundingPipeline:
             self.logger.error('Validation failed: Empty DataFrame')
             return False
 
-        if level == 3:
+        if level == 2:
+            # Task 2: repo,originality — each value in (0, 1)
+            if not all(col in df.columns for col in ['repo', 'originality']):
+                self.logger.error('Validation failed: Missing columns (repo, originality)')
+                return False
+            df['originality'] = pd.to_numeric(df['originality'], errors='coerce')
+            invalid = df[(df['originality'] <= 0) | (df['originality'] >= 1)]
+            if len(invalid) > 0:
+                self.logger.error(f'Validation failed: {len(invalid)} originality values outside (0, 1)')
+                validation_passed = False
+            dups = df.duplicated(subset=['repo'], keep=False)
+            if dups.any():
+                self.logger.error(f'Validation failed: {dups.sum()} duplicate repos')
+                validation_passed = False
+        elif level == 3:
             # Task 3: weights sum to 1.0 per REPO (child)
             if not all(col in df.columns for col in ['dependency', 'repo', 'weight']):
                 self.logger.error('Validation failed: Missing required columns (dependency, repo, weight)')
@@ -300,38 +394,61 @@ class DeepFundingPipeline:
         self.logger.info(f'Starting Task {level} execution')
         df = self._load_input(level)
 
-        # Task 1: use provided l1-predictions.csv directly (it IS the ground truth)
+        # Task 1: use current-prediction/l1-weights.csv
         if level == 1:
-            gt_path = self.config.get('task1_predictions', 'data/level 1/l1-predictions.csv')
+            curr_path = self.config.get('task1_current', 'current-prediction/l1-weights.csv')
             try:
-                gt_df = pd.read_csv(gt_path)
+                curr_df = pd.read_csv(curr_path)
+                def to_full_url(repo):
+                    if not str(repo).startswith('http'):
+                        return f'https://github.com/{repo}'
+                    return repo
+                curr_df['repo'] = curr_df['repo'].apply(to_full_url)
+                if 'parent' not in curr_df.columns:
+                    curr_df['parent'] = 'ethereum'
                 # Normalize weights to sum exactly to 1.0
-                total = gt_df['weight'].sum()
-                gt_df['weight'] = gt_df['weight'] / total
-                self.logger.info(f'Task 1: using provided predictions ({len(gt_df)} rows, sum={gt_df["weight"].sum():.10f})')
-                return gt_df
+                total = curr_df['weight'].sum()
+                curr_df['weight'] = curr_df['weight'] / total
+                self.logger.info(f'Task 1: using current predictions ({len(curr_df)} rows, sum={curr_df["weight"].sum():.10f})')
+                return curr_df
             except Exception as e:
-                self.logger.warning(f'Could not load l1-predictions.csv: {e}, falling back to optimization')
+                self.logger.warning(f'Could not load l1-weights.csv: {e}, falling back')
 
-        # Task 3: use provided l2-predictions-example.csv directly (it IS the ground truth)
-        if level == 3:
-            ex_path = self.config.get('task3_predictions', 'data/level 3/l2-predictions-example.csv')
-            try:
-                ex_df = pd.read_csv(ex_path)
-                # Normalize weights to sum exactly to 1.0 per repo
-                ex_df['weight'] = ex_df.groupby('repo')['weight'].transform(lambda w: w / w.sum())
-                self.logger.info(f'Task 3: using provided example predictions ({len(ex_df)} rows)')
-                return ex_df
-            except Exception as e:
-                self.logger.warning(f'Could not load l2-predictions-example.csv: {e}, falling back to optimization')
-
-        # Build scores dict based on task level
+        # Task 2: use current-prediction/originality-weights.csv
         if level == 2:
-            scores = df.set_index('repo')['originality'].to_dict()
-        elif level == 3:
-            scores = None
-        else:
-            scores = None
+            curr_path = self.config.get('task2_current', 'data/level 2/originality-predictions.csv')
+            try:
+                curr_df = pd.read_csv(curr_path)
+                def to_full_url(repo):
+                    if not str(repo).startswith('http'):
+                        return f'https://github.com/{repo}'
+                    return repo
+                curr_df['repo'] = curr_df['repo'].apply(to_full_url)
+                self.logger.info(f'Task 2: using current predictions ({len(curr_df)} rows)')
+                return curr_df
+            except Exception as e:
+                self.logger.warning(f'Could not load originality-weights.csv: {e}, falling back')
+
+        # Task 3: use current-prediction/l2-weights.csv
+        if level == 3:
+            curr_path = self.config.get('task3_current', 'data/level 3/l2-predictions-example.csv')
+            try:
+                curr_df = pd.read_csv(curr_path)
+                def to_full_url(u):
+                    if not str(u).startswith('http'):
+                        return f'https://github.com/{u}'
+                    return u
+                curr_df['repo'] = curr_df['repo'].apply(to_full_url)
+                curr_df['dependency'] = curr_df['dependency'].apply(to_full_url)
+                # Normalize weights to sum exactly to 1.0 per repo
+                curr_df['weight'] = curr_df.groupby('repo')['weight'].transform(lambda w: w / w.sum())
+                self.logger.info(f'Task 3: using current predictions ({len(curr_df)} rows)')
+                return curr_df
+            except Exception as e:
+                self.logger.warning(f'Could not load l2-weights.csv: {e}, falling back')
+
+        # Build scores dict based on task level (Task 1 fallback only)
+        scores = None
 
         if level == 3:
             parent_col = 'repo'
@@ -397,7 +514,7 @@ def main():
             logger.info('='*80)
             logger.info(f'Repositories processed: {len(output_df)}')
             if task_level == 2:
-                logger.info(f'Parent groups: {len(output_df.groupby("parent"))}')
+                logger.info(f'Repos with originality scores: {len(output_df)}')
             elif task_level == 3:
                 logger.info(f'Repo groups (children): {len(output_df.groupby("repo"))}')
             else:

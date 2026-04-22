@@ -41,8 +41,7 @@ venv.bak/
 *.swo
 *~
 .kiro
-
-# OS
+current-prediction
 .DS_Store
 Thumbs.db
 desktop.ini
